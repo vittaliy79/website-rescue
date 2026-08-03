@@ -46,6 +46,8 @@ export type Lead = {
   analysis?: WebsiteAnalysis;
   analyzedAt?: string;
   rescueScore?: number;
+  outreachCurrent?: string;
+  outreachVersions?: { body: string; createdAt: string }[];
 };
 
 export const statuses: LeadStatus[] = ["New","Reviewed","Contacted","Interested","Proposal","Won","Lost"];

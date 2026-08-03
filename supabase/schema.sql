@@ -23,6 +23,8 @@ CREATE TABLE IF NOT EXISTS wr_leads (
   analysis jsonb,
   analyzed_at text,
   rescue_score integer DEFAULT 0,
+  outreach_current text,
+  outreach_versions jsonb,
   updated_at timestamptz DEFAULT now()
 );
 

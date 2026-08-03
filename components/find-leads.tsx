@@ -1,11 +1,51 @@
 "use client";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { AlertCircle, ArrowUpRight, Check, CheckSquare, Clock, Globe, Loader2, MapPin, RefreshCw, Search, Square, Star, Zap } from "lucide-react";
 import type { Lead, PlaceResult, WebsiteAnalysis } from "@/lib/types";
 import { issuesFromAnalysis, scoreLead } from "@/lib/types";
 import { isSupabaseConfigured, dbLoadPlaceAnalyses, dbSavePlaceAnalysis } from "@/lib/db";
 
 type AnalysisState = { status: "idle" | "loading" | "done" | "error"; data?: WebsiteAnalysis; error?: string; fromCache?: boolean; cachedAt?: string };
+type SearchHistoryItem = { query: string; at: string; limit: 10 | 20 | 50; resultCount: number; expanded: number };
+
+const searchHistoryKey = "website-rescue-find-history-v1";
+
+function buildExpandedQueries(query: string): string[] {
+  const trimmed = query.trim().replace(/\s+/g, " ");
+  const variants = new Set<string>([trimmed]);
+  const inMatch = trimmed.match(/^(.*?)(?:\s+in\s+|\s+near\s+)(.+)$/i);
+
+  if (inMatch) {
+    const subject = inMatch[1].trim();
+    const location = inMatch[2].trim();
+    if (subject && location) {
+      variants.add(`${location} ${subject}`);
+      variants.add(`${subject} near ${location}`);
+      variants.add(`${subject} ${location}`);
+    }
+  }
+
+  const commaParts = trimmed.split(",").map(part => part.trim()).filter(Boolean);
+  if (commaParts.length >= 2) {
+    const [left, right] = commaParts;
+    variants.add(`${right} ${left}`);
+    variants.add(`${left} near ${right}`);
+  }
+
+  return [...variants].filter(Boolean).slice(0, 5);
+}
+
+function mergePlaces(existing: PlaceResult[], incoming: PlaceResult[]): PlaceResult[] {
+  const seen = new Set<string>();
+  const merged: PlaceResult[] = [];
+  for (const place of [...existing, ...incoming]) {
+    const key = place.placeId || place.websiteUrl || `${place.company}|${place.city}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(place);
+  }
+  return merged;
+}
 
 function placeToLead(place: PlaceResult, analysis?: WebsiteAnalysis): Lead {
   const noWebsite = !place.websiteUrl;
@@ -88,27 +128,70 @@ export function FindLeads({ existingLeads, onImport, notify }: {
   const [imported, setImported] = useState<Set<string>>(new Set());
   const [minScore, setMinScore] = useState(10);
   const [useScoreFilter, setUseScoreFilter] = useState(true);
+  const [searchHistory, setSearchHistory] = useState<SearchHistoryItem[]>([]);
+  const [expandedQueries, setExpandedQueries] = useState(1);
   const [dbError, setDbError] = useState<string | null>(null);
 
-  const handleSearch = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!query.trim() || searching) return;
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(searchHistoryKey);
+      if (raw) setSearchHistory(JSON.parse(raw) as SearchHistoryItem[]);
+    } catch {
+      // ignore malformed local history
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(searchHistoryKey, JSON.stringify(searchHistory.slice(0, 10)));
+    } catch {
+      // ignore storage quota or privacy blocking
+    }
+  }, [searchHistory]);
+
+  const runSearch = async (rawQuery: string) => {
+    const normalizedQuery = rawQuery.trim();
+    if (!normalizedQuery || searching) return;
     setSearching(true);
     setSearchError(null);
     setResults([]);
     setSelected(new Set());
     setAnalyses({});
     setImported(new Set());
+    setExpandedQueries(1);
     try {
-      const res = await fetch("/api/places/search", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: query.trim(), maxResults }),
-      });
-      const data = await res.json();
-      if (data.error) { setSearchError(data.error); return; }
-      const places: PlaceResult[] = data.places ?? [];
+      const variants = buildExpandedQueries(normalizedQuery);
+      setExpandedQueries(variants.length);
+      const collected: PlaceResult[] = [];
+      let firstError: string | null = null;
+
+      for (const variant of variants) {
+        const res = await fetch("/api/places/search", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ query: variant, maxResults }),
+        });
+        const data = await res.json();
+        if (data.error) {
+          firstError ??= data.error;
+          continue;
+        }
+        collected.push(...(data.places ?? []));
+      }
+
+      const places = mergePlaces([], collected);
       setResults(places);
+
+      const historyQuery = normalizedQuery.replace(/\s+/g, " ");
+      setSearchHistory(prev => [
+        { query: historyQuery, at: new Date().toISOString(), limit: maxResults, resultCount: places.length, expanded: variants.length },
+        ...prev.filter(item => item.query !== historyQuery),
+      ].slice(0, 10));
+
+      if (!places.length && firstError) {
+        setSearchError(firstError);
+        return;
+      }
 
       // Load cached analyses from Supabase — pre-populates scores from previous sessions
       if (isSupabaseConfigured && places.length > 0) {
@@ -131,6 +214,11 @@ export function FindLeads({ existingLeads, onImport, notify }: {
     } finally {
       setSearching(false);
     }
+  };
+
+  const handleSearch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await runSearch(query);
   };
 
   const analyzeSingle = useCallback(async (place: PlaceResult) => {
@@ -239,8 +327,28 @@ export function FindLeads({ existingLeads, onImport, notify }: {
         </form>
         <p className="find-hint">
           Google Places API (New). Requires <code>GOOGLE_PLACES_API_KEY</code>.
+          Searches expand into a few related query variants so you can see more than a single first page.
           {isSupabaseConfigured && <> Analyses persist in Supabase.</>}
         </p>
+        {searchHistory.length > 0 && (
+          <div className="find-history">
+            <span>Recent searches</span>
+            <div className="find-history-list">
+              {searchHistory.map(item => (
+                <button
+                  key={`${item.query}-${item.at}`}
+                  type="button"
+                  className="find-history-chip"
+                  onClick={() => { setQuery(item.query); void runSearch(item.query); }}
+                  title={`${item.resultCount} results · expanded across ${item.expanded} queries`}
+                >
+                  <strong>{item.query}</strong>
+                  <small>{item.resultCount} results</small>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </section>
 
       {searchError && (
@@ -271,6 +379,7 @@ export function FindLeads({ existingLeads, onImport, notify }: {
           <div className="find-results-head">
             <div className="find-results-title">
               <strong>{visibleResults.length} of {results.length} shown</strong>
+              {expandedQueries > 1 && <span className="find-expanded-note">Expanded across {expandedQueries} related searches</span>}
               {hiddenCount > 0 && useScoreFilter && <span className="find-hidden-note">{hiddenCount} hidden (score &lt; {minScore})</span>}
               <span className="muted">{importableVisible.length} importable · {selected.size} selected</span>
             </div>

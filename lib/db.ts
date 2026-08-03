@@ -30,6 +30,8 @@ export function rowToLead(r: Row): Lead {
     analysis: (r.analysis as WebsiteAnalysis) || undefined,
     analyzedAt: (r.analyzed_at as string) || undefined,
     rescueScore: r.rescue_score != null ? Number(r.rescue_score) : undefined,
+    outreachCurrent: (r.outreach_current as string) || undefined,
+    outreachVersions: (r.outreach_versions as { body: string; createdAt: string }[] | undefined) || undefined,
   };
 }
 
@@ -57,6 +59,8 @@ export function leadToRow(lead: Lead): Row {
     analysis: lead.analysis ?? null,
     analyzed_at: lead.analyzedAt ?? null,
     rescue_score: scoreLead(lead),
+    outreach_current: lead.outreachCurrent ?? null,
+    outreach_versions: lead.outreachVersions ?? null,
   };
 }
 
