@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ArrowUpRight, BarChart3, Building2, Check, ChevronDown, CircleDollarSign, Copy, Download, Gauge, LayoutDashboard, Mail, MapPin, Menu, MoreHorizontal, Plus, Search, Sparkles, Target, Trash2, X } from "lucide-react";
 import { demoLeads } from "@/lib/demo";
 import { issueLabels, Lead, LeadStatus, scoreLead, statuses } from "@/lib/types";
+import { isSupabaseConfigured, dbLoadLeads, dbSaveLead, dbDeleteLead } from "@/lib/db";
 import { FindLeads } from "@/components/find-leads";
 
 const storageKey="website-rescue-leads-v1";
@@ -12,14 +13,14 @@ const statusClass=(s:LeadStatus)=>`status status-${s.toLowerCase()}`;
 
 export function RescueApp(){
  const [leads,setLeads]=useState<Lead[]>([]); const [ready,setReady]=useState(false); const [view,setView]=useState<"dashboard"|"leads"|"find">("dashboard"); const [editing,setEditing]=useState<Lead|null>(null); const [query,setQuery]=useState(""); const [status,setStatus]=useState("All"); const [toast,setToast]=useState(""); const [mobileNav,setMobileNav]=useState(false);
- useEffect(()=>{try{const raw=localStorage.getItem(storageKey);setLeads(raw?JSON.parse(raw):demoLeads)}catch{setLeads(demoLeads)}setReady(true)},[]);
- useEffect(()=>{if(ready)localStorage.setItem(storageKey,JSON.stringify(leads))},[leads,ready]);
+ useEffect(()=>{(async()=>{if(isSupabaseConfigured){const data=await dbLoadLeads();if(data!==null){setLeads(data.length>0?data:demoLeads);setReady(true);return;}}try{const raw=localStorage.getItem(storageKey);setLeads(raw?JSON.parse(raw):demoLeads)}catch{setLeads(demoLeads)}setReady(true);})();},[]);
+ useEffect(()=>{if(ready&&!isSupabaseConfigured)localStorage.setItem(storageKey,JSON.stringify(leads))},[leads,ready]);
  const filtered=useMemo(()=>leads.filter(l=>(status==="All"||l.status===status)&&`${l.company} ${l.niche} ${l.city}`.toLowerCase().includes(query.toLowerCase())),[leads,status,query]);
  const pipeline=leads.filter(l=>!["Won","Lost"].includes(l.status)).reduce((s,l)=>s+l.value,0); const won=leads.filter(l=>l.status==="Won").reduce((s,l)=>s+l.value,0); const contacted=leads.filter(l=>!["New","Reviewed"].includes(l.status)).length; const avg=Math.round(leads.reduce((s,l)=>s+scoreLead(l),0)/(leads.length||1));
- const save=(lead:Lead)=>{setLeads(p=>p.some(x=>x.id===lead.id)?p.map(x=>x.id===lead.id?lead:x):[{...lead,id:crypto.randomUUID(),createdAt:new Date().toISOString().slice(0,10)},...p]);setEditing(null);show("Lead saved")};
- const remove=(id:string)=>{if(confirm("Delete this lead?")){setLeads(p=>p.filter(x=>x.id!==id));setEditing(null);show("Lead deleted")}};
+ const save=async(lead:Lead)=>{const l=lead.id?lead:{...lead,id:crypto.randomUUID(),createdAt:new Date().toISOString().slice(0,10)};setLeads(p=>p.some(x=>x.id===l.id)?p.map(x=>x.id===l.id?l:x):[l,...p]);setEditing(null);if(isSupabaseConfigured)await dbSaveLead(l);show("Lead saved");};
+ const remove=async(id:string)=>{if(confirm("Delete this lead?")){setLeads(p=>p.filter(x=>x.id!==id));setEditing(null);if(isSupabaseConfigured)await dbDeleteLead(id);show("Lead deleted")}};
  const show=(s:string)=>{setToast(s);setTimeout(()=>setToast(""),2200)};
- const importLeads=(newLeads:Lead[])=>{setLeads(p=>[...newLeads.filter(n=>!p.some(e=>e.placeId&&e.placeId===n.placeId)),...p]);};
+ const importLeads=async(newLeads:Lead[])=>{const toAdd=newLeads.filter(n=>!leads.some(e=>e.placeId&&e.placeId===n.placeId));setLeads(p=>[...toAdd,...p]);if(isSupabaseConfigured)await Promise.all(toAdd.map(dbSaveLead));};
  const exportCsv=()=>{const headers=["Company","Niche","City","Website","Contact","Email","Phone","Status","Score","Deal value","Notes"];const rows=leads.map(l=>[l.company,l.niche,l.city,l.website,l.contactName,l.email,l.phone,l.status,scoreLead(l),l.value,l.notes]);const csv=[headers,...rows].map(r=>r.map(v=>`"${String(v).replaceAll('"','""')}"`).join(",")).join("\n");const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));a.download="website-rescue-leads.csv";a.click();URL.revokeObjectURL(a.href);show("CSV exported")};
  if(!ready)return <div className="loading"><Sparkles/> Loading Website Rescue…</div>;
  return <div className="shell">

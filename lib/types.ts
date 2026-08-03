@@ -43,6 +43,7 @@ export type Lead = {
   reviewCount?: number;
   analysis?: WebsiteAnalysis;
   analyzedAt?: string;
+  rescueScore?: number;
 };
 
 export const statuses: LeadStatus[] = ["New","Reviewed","Contacted","Interested","Proposal","Won","Lost"];
