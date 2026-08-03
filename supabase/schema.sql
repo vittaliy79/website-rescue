@@ -1,8 +1,7 @@
--- Run this in the Supabase SQL Editor (Dashboard → SQL Editor → New query)
+-- Run this in the Supabase SQL Editor (Dashboard -> SQL Editor -> New query)
 
--- Main CRM table
-CREATE TABLE IF NOT EXISTS leads (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+CREATE TABLE IF NOT EXISTS wr_leads (
+  id uuid PRIMARY KEY,
   company text NOT NULL DEFAULT '',
   niche text DEFAULT '',
   city text DEFAULT '',
@@ -23,11 +22,11 @@ CREATE TABLE IF NOT EXISTS leads (
   review_count integer,
   analysis jsonb,
   analyzed_at text,
-  rescue_score integer DEFAULT 0
+  rescue_score integer DEFAULT 0,
+  updated_at timestamptz DEFAULT now()
 );
 
--- Analysis cache for Find Leads (persists scores between sessions)
-CREATE TABLE IF NOT EXISTS place_analyses (
+CREATE TABLE IF NOT EXISTS wr_place_analyses (
   place_id text PRIMARY KEY,
   company text,
   website_url text,
@@ -36,6 +35,19 @@ CREATE TABLE IF NOT EXISTS place_analyses (
   analyzed_at timestamptz DEFAULT now()
 );
 
--- Disable RLS for private single-user use
-ALTER TABLE leads DISABLE ROW LEVEL SECURITY;
-ALTER TABLE place_analyses DISABLE ROW LEVEL SECURITY;
+ALTER TABLE wr_leads ENABLE ROW LEVEL SECURITY;
+ALTER TABLE wr_place_analyses ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "allow_all_wr_leads" ON wr_leads;
+CREATE POLICY "allow_all_wr_leads"
+ON wr_leads
+FOR ALL
+USING (true)
+WITH CHECK (true);
+
+DROP POLICY IF EXISTS "allow_all_wr_place_analyses" ON wr_place_analyses;
+CREATE POLICY "allow_all_wr_place_analyses"
+ON wr_place_analyses
+FOR ALL
+USING (true)
+WITH CHECK (true);
