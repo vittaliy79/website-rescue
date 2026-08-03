@@ -124,9 +124,20 @@ function analyzeHtml(html: string, finalUrl: string, responseTimeMs: number, htt
 
   const h = html.toLowerCase();
 
-  const hasCTA = /\b(call\s*(now|us|today)|contact\s*us|get\s*(a\s*)?(free\s*)?(quote|estimate|consultation|proposal|inspection)|free\s*(estimate|quote|consultation|inspection|trial)|request\s*(an?\s*)?(quote|estimate|appointment|service|callback|call|demo)|get\s+started|book\s*(now|online|today|an?\s+appointment|a\s+(visit|call))?|schedule\s*(now|today|free|a?\s*(appointment|consultation|visit|call|estimate|cleaning|exam))?|make\s+an?\s+appointment|sign\s+up|apply\s+now|order\s+now|buy\s+now|shop\s+now|try\s+(it\s+)?(free|now)|start\s+(free|your)|claim\s+(your|free))\b/i.test(h);
+  const hasCTA =
+    /\b(call\s*(now|us|today)|contact\s*us|get\s*(a\s*)?(free\s*)?(quote|estimate|consultation|proposal|inspection)|free\s*(estimate|quote|consultation|inspection|trial|exam|cleaning)|request\s*(an?\s*)?(quote|estimate|appointment|service|callback|call|demo)|get\s+started|book\s*(now|online|today|an?\s+appointment|a\s+(visit|call))?|schedule\s*(now|today|free|a?\s*(appointment|consultation|visit|call|estimate|cleaning|exam|service))?|make\s+an?\s+appointment|sign\s+up|apply\s+now|order\s+now|buy\s+now|shop\s+now|try\s+(it\s+)?(free|now)|start\s+(free|your)|claim\s+(your|free)|new\s+patient\s+special|see\s+a\s+doctor|find\s+a\s+(doctor|dentist|provider)|urgent\s+care|emergency\s+(appointment|visit|care)|same\s+day\s+(appointment|service)|call\s+to\s+(schedule|book|make)|click\s+to\s+(call|book)|send\s+a\s+message|send\s+us\s+a|reach\s+out|get\s+in\s+touch|speak\s+(with|to)\s+(us|a)|chat\s+(with\s+us|now|live)|text\s+us|whatsapp)\b/i.test(h) ||
+    // CTA in button/link text via href patterns
+    /href=["'](tel:|mailto:|#contact|#book|#schedule|#appointment)/i.test(html);
 
-  const hasBooking = /\b(book\s*(now|online|today|an?\s+appointment|a\s*(visit|service|call))?|appointment(s)?\b|schedul(e|ing|er)\b|reserv(e|ation|ing)\b|availabilit|pick\s+a\s+(time|date|slot)|online\s+(booking|scheduling)|new\s+patient|returning\s+patient|patient\s+portal|request\s+an?\s+appointment|same[- ]day)\b|calendly\.|acuityscheduling\.|mindbodyonline\.|zocdoc\.|patientpop\.|solutionreach\.|healthgrades\.|nexhealth\.|opencare\.|fresha\.|vagaro\.|booksy\./i.test(h);
+  const hasBooking =
+    // Direct booking keywords in page text / buttons / links
+    /\b(book\s*(now|online|today|an?\s*(appointment|visit|service|call))?|appointment(s)?\b|schedul(e|ing|er|ed)\b|reserv(e|ation|ations|ing)\b|availabilit|pick\s+a\s+(time|date|slot)|online\s+(booking|scheduling|appointment)|new\s+patient|returning\s+patient|patient\s+portal|request\s+an?\s+appointment|same[- ]day\s+(appointment|service)|book\s+a\s+(free|demo|call|visit|tour|consult))\b/i.test(h) ||
+    // Booking widget platforms (in script src, href, iframe src, or inline links)
+    /calendly\.|acuityscheduling\.|mindbodyonline\.|zocdoc\.|patientpop\.|solutionreach\.|healthgrades\.|nexhealth\.|opencare\.|fresha\.|vagaro\.|booksy\.|setmore\.|square\.site|squareup\.com\/appointments|simplybook\.|janeapp\.|drchrono\.|athenahealth\.|intakeq\.|nookal\.|cliniko\.|10to8\.|vcita\.|appointy\.|genbook\.|picktime\.|bookedin\.|schedulicity\./i.test(h) ||
+    // Booking button patterns: <a href="...book..."> or data-action="book"
+    /href=["'][^"']*\b(book|appointment|schedule|reserve)\b[^"']*["']/i.test(html) ||
+    // Calendar embed or booking iframe
+    /<iframe[^>]+(?:calendly|acuity|zocdoc|booking|schedule|appointment)/i.test(html);
 
   const hasPhone = /href=["']tel:/i.test(html) || /(?:\+?1[\s.\-()]?)?\(?\d{3}\)?[\s.\-]?\d{3}[\s.\-]?\d{4}/.test(html);
 
@@ -182,12 +193,24 @@ export async function POST(req: NextRequest) {
     if (msg.includes("private") || msg.includes("localhost") || msg.includes("internal") || msg.includes("resolve") || msg.includes("Protocol")) {
       return NextResponse.json({ error: "This URL cannot be analyzed." }, { status: 422 });
     }
+    // Check DNS: if hostname resolves but request failed/timed out the site is
+    // likely alive but blocking our server (Cloudflare silent-drop, IP block, etc.)
+    let dnsResolves = false;
+    try {
+      const hostname = new URL(fullUrl).hostname;
+      await lookup(hostname, { all: true });
+      dnsResolves = true;
+    } catch { /* ignore */ }
+
     if ((err as Error).name === "AbortError") {
       const analysis: WebsiteAnalysis = {
-        isReachable: false, responseTimeMs: TIMEOUT_MS, hasHttps: fullUrl.startsWith("https://"),
+        // DNS resolves → server is up, request was silently dropped (bot protection)
+        isReachable: dnsResolves, responseTimeMs: TIMEOUT_MS, hasHttps: fullUrl.startsWith("https://"),
         hasMobileViewport: false, hasTitle: false, hasMetaDescription: false,
         hasPhone: false, hasContactForm: false, hasBooking: false,
-        hasCTA: false, hasOutdatedHTML: false, httpStatus: null, blocked: false, error: "Request timed out",
+        hasCTA: false, hasOutdatedHTML: false, httpStatus: null,
+        blocked: dnsResolves,
+        error: dnsResolves ? "Request timed out — site is likely blocking server-side requests" : "Request timed out",
       };
       return NextResponse.json({ analysis, noWebsite: false });
     }
@@ -195,7 +218,9 @@ export async function POST(req: NextRequest) {
       isReachable: false, responseTimeMs: null, hasHttps: fullUrl.startsWith("https://"),
       hasMobileViewport: false, hasTitle: false, hasMetaDescription: false,
       hasPhone: false, hasContactForm: false, hasBooking: false,
-      hasCTA: false, hasOutdatedHTML: false, httpStatus: null, blocked: false, error: msg.slice(0, 120),
+      hasCTA: false, hasOutdatedHTML: false, httpStatus: null,
+      blocked: dnsResolves,
+      error: msg.slice(0, 120),
     };
     return NextResponse.json({ analysis, noWebsite: false });
   }

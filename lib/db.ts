@@ -62,28 +62,28 @@ export function leadToRow(lead: Lead): Row {
 
 export async function dbLoadLeads(): Promise<Lead[] | null> {
   if (!supabase) return null;
-  const { data, error } = await supabase.from("leads").select("*").order("created_at", { ascending: false });
+  const { data, error } = await supabase.from("wr_leads").select("*").order("created_at", { ascending: false });
   if (error) { console.error("dbLoadLeads:", error.message); return null; }
   return (data as Row[]).map(rowToLead);
 }
 
 export async function dbSaveLead(lead: Lead): Promise<boolean> {
   if (!supabase) return false;
-  const { error } = await supabase.from("leads").upsert(leadToRow(lead));
+  const { error } = await supabase.from("wr_leads").upsert(leadToRow(lead));
   if (error) { console.error("dbSaveLead:", error.message); return false; }
   return true;
 }
 
 export async function dbDeleteLead(id: string): Promise<boolean> {
   if (!supabase) return false;
-  const { error } = await supabase.from("leads").delete().eq("id", id);
+  const { error } = await supabase.from("wr_leads").delete().eq("id", id);
   if (error) { console.error("dbDeleteLead:", error.message); return false; }
   return true;
 }
 
 export async function dbLoadPlaceAnalyses(placeIds: string[]): Promise<Record<string, { analysis: WebsiteAnalysis; rescueScore: number }>> {
   if (!supabase || !placeIds.length) return {};
-  const { data, error } = await supabase.from("place_analyses").select("*").in("place_id", placeIds);
+  const { data, error } = await supabase.from("wr_place_analyses").select("*").in("place_id", placeIds);
   if (error || !data) return {};
   const out: Record<string, { analysis: WebsiteAnalysis; rescueScore: number }> = {};
   (data as Row[]).forEach(r => {
@@ -94,7 +94,7 @@ export async function dbLoadPlaceAnalyses(placeIds: string[]): Promise<Record<st
 
 export async function dbSavePlaceAnalysis(placeId: string, company: string, websiteUrl: string, analysis: WebsiteAnalysis, rescueScore: number): Promise<void> {
   if (!supabase) return;
-  const { error } = await supabase.from("place_analyses").upsert({
+  const { error } = await supabase.from("wr_place_analyses").upsert({
     place_id: placeId,
     company,
     website_url: websiteUrl || null,

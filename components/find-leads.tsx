@@ -87,6 +87,7 @@ export function FindLeads({ existingLeads, onImport, notify }: {
   const [analyses, setAnalyses] = useState<Record<string, AnalysisState>>({});
   const [imported, setImported] = useState<Set<string>>(new Set());
   const [minScore, setMinScore] = useState(10);
+  const [useScoreFilter, setUseScoreFilter] = useState(true);
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -173,11 +174,13 @@ export function FindLeads({ existingLeads, onImport, notify }: {
 
   const alreadyIn = (p: PlaceResult) => imported.has(p.placeId) || isDuplicate(p, existingLeads);
 
-  // Analyzed results below minScore are hidden; unanalyzed are always shown
+  // Filter logic: unanalyzed always shown; blocked sites shown regardless of score
   const visibleResults = results.filter(p => {
+    if (!useScoreFilter) return true;
     const aState = analyses[p.placeId];
-    if (aState?.status === "done" && aState.data) return calcScore(aState.data, !p.websiteUrl) >= minScore;
-    return true;
+    if (!aState || aState.status !== "done" || !aState.data) return true;
+    if (aState.data.blocked) return true;  // blocked → we don\'t know real score
+    return calcScore(aState.data, !p.websiteUrl) >= minScore;
   });
 
   const hiddenCount = results.length - visibleResults.length;
@@ -252,16 +255,22 @@ export function FindLeads({ existingLeads, onImport, notify }: {
           <div className="find-results-head">
             <div className="find-results-title">
               <strong>{visibleResults.length} of {results.length} shown</strong>
-              {hiddenCount > 0 && <span className="find-hidden-note">{hiddenCount} hidden (score &lt; {minScore})</span>}
+              {hiddenCount > 0 && useScoreFilter && <span className="find-hidden-note">{hiddenCount} hidden (score &lt; {minScore})</span>}
               <span className="muted">{importableVisible.length} importable · {selected.size} selected</span>
             </div>
             <div className="find-results-actions">
-              <label className="find-minscore-label">
-                Min score
-                <input type="number" className="find-minscore-input" value={minScore}
-                  onChange={e => setMinScore(Math.max(0, Math.min(100, Number(e.target.value))))}
-                  min={0} max={100} />
+              <label className="find-filter-toggle" title="When on, results below the min score are hidden">
+                <input type="checkbox" checked={useScoreFilter} onChange={e => setUseScoreFilter(e.target.checked)} />
+                Filter by score
               </label>
+              {useScoreFilter && (
+                <label className="find-minscore-label">
+                  Min score
+                  <input type="number" className="find-minscore-input" value={minScore}
+                    onChange={e => setMinScore(Math.max(0, Math.min(100, Number(e.target.value))))}
+                    min={0} max={100} />
+                </label>
+              )}
               <button className="secondary small" onClick={analyzeAll}
                 disabled={results.every(p => analyses[p.placeId]?.status === "done" || analyses[p.placeId]?.status === "loading")}>
                 <Zap />Analyze all
