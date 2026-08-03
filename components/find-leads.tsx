@@ -257,11 +257,11 @@ export function FindLeads({ existingLeads, onImport, notify }: {
       )}
 
       {dbError && (
-        <div className="find-error find-error-db">
+        <div className={`find-error find-error-db${dbError.toLowerCase().includes("failed to fetch") ? " find-error-offline" : ""}`}>
           <AlertCircle size={15} />
           <div>
-            <strong>Supabase sync error</strong>
-            <p>{dbError}</p>
+            <strong>{dbError.toLowerCase().includes("failed to fetch") ? "Supabase unavailable" : "Supabase sync error"}</strong>
+            <p>{dbError.toLowerCase().includes("failed to fetch") ? "Could not reach Supabase. Results save locally only." : dbError}</p>
           </div>
         </div>
       )}

@@ -79,3 +79,5 @@ button.small svg{width:13px}
 .find-cached-badge{display:inline-flex;align-items:center;margin-left:5px;color:var(--muted);vertical-align:middle;cursor:help}
 .find-error-db{background:#f0f7ff;border-color:#7ab3e0}
 .find-error-db svg{color:#3b82f6}
+.find-error-offline{background:#fffbeb;border-color:#f59e0b}
+.find-error-offline svg{color:#d97706}

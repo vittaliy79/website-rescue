@@ -86,7 +86,12 @@ export async function dbLoadPlaceAnalyses(placeIds: string[]): Promise<{
   error: string | null;
 }> {
   if (!supabase || !placeIds.length) return { data: {}, error: null };
-  const { data, error } = await supabase.from("wr_place_analyses").select("*").in("place_id", placeIds);
+  let data: unknown, error: { message: string } | null;
+  try {
+    ({ data, error } = await supabase.from("wr_place_analyses").select("*").in("place_id", placeIds));
+  } catch (e) {
+    return { data: {}, error: e instanceof Error ? e.message : String(e) };
+  }
   if (error) return { data: {}, error: error.message };
   const out: Record<string, { analysis: WebsiteAnalysis; rescueScore: number; analyzedAt: string }> = {};
   (data as Row[]).forEach(r => {
@@ -101,14 +106,18 @@ export async function dbLoadPlaceAnalyses(placeIds: string[]): Promise<{
 
 export async function dbSavePlaceAnalysis(placeId: string, company: string, websiteUrl: string, analysis: WebsiteAnalysis, rescueScore: number): Promise<string | null> {
   if (!supabase) return null;
-  const { error } = await supabase.from("wr_place_analyses").upsert({
-    place_id: placeId,
-    company,
-    website_url: websiteUrl || null,
-    analysis,
-    rescue_score: rescueScore,
-    analyzed_at: new Date().toISOString(),
-  });
-  if (error) { console.error("dbSavePlaceAnalysis:", error.message); return error.message; }
+  try {
+    const { error } = await supabase.from("wr_place_analyses").upsert({
+      place_id: placeId,
+      company,
+      website_url: websiteUrl || null,
+      analysis,
+      rescue_score: rescueScore,
+      analyzed_at: new Date().toISOString(),
+    });
+    if (error) return error.message;
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e);
+  }
   return null;
 }
