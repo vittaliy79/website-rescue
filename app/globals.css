@@ -76,3 +76,6 @@ button.small svg{width:13px}
 .find-blocked-tag{display:inline-flex;background:#f0f4ff;color:#4f6ef7;border-radius:5px;padding:2px 7px;font-size:11px;cursor:help}
 .find-filter-toggle{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--ink);cursor:pointer;white-space:nowrap}
 .find-filter-toggle input[type=checkbox]{accent-color:var(--purple);width:15px;height:15px;cursor:pointer}
+.find-cached-badge{display:inline-flex;align-items:center;margin-left:5px;color:var(--muted);vertical-align:middle;cursor:help}
+.find-error-db{background:#f0f7ff;border-color:#7ab3e0}
+.find-error-db svg{color:#3b82f6}

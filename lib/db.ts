@@ -81,19 +81,26 @@ export async function dbDeleteLead(id: string): Promise<boolean> {
   return true;
 }
 
-export async function dbLoadPlaceAnalyses(placeIds: string[]): Promise<Record<string, { analysis: WebsiteAnalysis; rescueScore: number }>> {
-  if (!supabase || !placeIds.length) return {};
+export async function dbLoadPlaceAnalyses(placeIds: string[]): Promise<{
+  data: Record<string, { analysis: WebsiteAnalysis; rescueScore: number; analyzedAt: string }>;
+  error: string | null;
+}> {
+  if (!supabase || !placeIds.length) return { data: {}, error: null };
   const { data, error } = await supabase.from("wr_place_analyses").select("*").in("place_id", placeIds);
-  if (error || !data) return {};
-  const out: Record<string, { analysis: WebsiteAnalysis; rescueScore: number }> = {};
+  if (error) return { data: {}, error: error.message };
+  const out: Record<string, { analysis: WebsiteAnalysis; rescueScore: number; analyzedAt: string }> = {};
   (data as Row[]).forEach(r => {
-    out[r.place_id as string] = { analysis: r.analysis as WebsiteAnalysis, rescueScore: Number(r.rescue_score) };
+    out[r.place_id as string] = {
+      analysis: r.analysis as WebsiteAnalysis,
+      rescueScore: Number(r.rescue_score),
+      analyzedAt: (r.analyzed_at as string) ?? "",
+    };
   });
-  return out;
+  return { data: out, error: null };
 }
 
-export async function dbSavePlaceAnalysis(placeId: string, company: string, websiteUrl: string, analysis: WebsiteAnalysis, rescueScore: number): Promise<void> {
-  if (!supabase) return;
+export async function dbSavePlaceAnalysis(placeId: string, company: string, websiteUrl: string, analysis: WebsiteAnalysis, rescueScore: number): Promise<string | null> {
+  if (!supabase) return null;
   const { error } = await supabase.from("wr_place_analyses").upsert({
     place_id: placeId,
     company,
@@ -102,5 +109,6 @@ export async function dbSavePlaceAnalysis(placeId: string, company: string, webs
     rescue_score: rescueScore,
     analyzed_at: new Date().toISOString(),
   });
-  if (error) console.error("dbSavePlaceAnalysis:", error.message);
+  if (error) { console.error("dbSavePlaceAnalysis:", error.message); return error.message; }
+  return null;
 }

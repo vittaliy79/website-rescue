@@ -1,11 +1,11 @@
 "use client";
 import { useCallback, useState } from "react";
-import { AlertCircle, ArrowUpRight, Check, CheckSquare, Globe, Loader2, MapPin, RefreshCw, Search, Square, Star, Zap } from "lucide-react";
+import { AlertCircle, ArrowUpRight, Check, CheckSquare, Clock, Globe, Loader2, MapPin, RefreshCw, Search, Square, Star, Zap } from "lucide-react";
 import type { Lead, PlaceResult, WebsiteAnalysis } from "@/lib/types";
 import { issuesFromAnalysis, scoreLead } from "@/lib/types";
 import { isSupabaseConfigured, dbLoadPlaceAnalyses, dbSavePlaceAnalysis } from "@/lib/db";
 
-type AnalysisState = { status: "idle" | "loading" | "done" | "error"; data?: WebsiteAnalysis; error?: string };
+type AnalysisState = { status: "idle" | "loading" | "done" | "error"; data?: WebsiteAnalysis; error?: string; fromCache?: boolean; cachedAt?: string };
 
 function placeToLead(place: PlaceResult, analysis?: WebsiteAnalysis): Lead {
   const noWebsite = !place.websiteUrl;
@@ -88,6 +88,7 @@ export function FindLeads({ existingLeads, onImport, notify }: {
   const [imported, setImported] = useState<Set<string>>(new Set());
   const [minScore, setMinScore] = useState(10);
   const [useScoreFilter, setUseScoreFilter] = useState(true);
+  const [dbError, setDbError] = useState<string | null>(null);
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -109,13 +110,18 @@ export function FindLeads({ existingLeads, onImport, notify }: {
       const places: PlaceResult[] = data.places ?? [];
       setResults(places);
 
-      // Load cached analyses from Supabase (persists scores across sessions)
+      // Load cached analyses from Supabase — pre-populates scores from previous sessions
       if (isSupabaseConfigured && places.length > 0) {
-        const cached = await dbLoadPlaceAnalyses(places.map(p => p.placeId));
-        if (Object.keys(cached).length > 0) {
+        setDbError(null);
+        const { data: cached, error: loadErr } = await dbLoadPlaceAnalyses(places.map(p => p.placeId));
+        if (loadErr) {
+          setDbError(`Supabase load error: ${loadErr}`);
+        } else if (Object.keys(cached).length > 0) {
           setAnalyses(
             Object.fromEntries(
-              Object.entries(cached).map(([id, { analysis }]) => [id, { status: "done" as const, data: analysis }])
+              Object.entries(cached).map(([id, { analysis, analyzedAt }]) => [
+                id, { status: "done" as const, data: analysis, fromCache: true, cachedAt: analyzedAt }
+              ])
             )
           );
         }
@@ -250,6 +256,16 @@ export function FindLeads({ existingLeads, onImport, notify }: {
         </div>
       )}
 
+      {dbError && (
+        <div className="find-error find-error-db">
+          <AlertCircle size={15} />
+          <div>
+            <strong>Supabase sync error</strong>
+            <p>{dbError}</p>
+          </div>
+        </div>
+      )}
+
       {results.length > 0 && (
         <section className="panel find-results-panel">
           <div className="find-results-head">
@@ -329,7 +345,10 @@ export function FindLeads({ existingLeads, onImport, notify }: {
                         {!place.websiteUrl
                           ? <span className="find-score high">100 <small>No website</small></span>
                           : score !== null
-                            ? <span className={`find-score ${score >= 60 ? "high" : score >= 30 ? "med" : "low"}`}>{score}</span>
+                            ? <span className={`find-score ${score >= 60 ? "high" : score >= 30 ? "med" : "low"}`}>
+                                {score}
+                                {aState?.fromCache && <span className="find-cached-badge" title={`Cached: ${aState.cachedAt ? new Date(aState.cachedAt).toLocaleDateString() : "prev. session"}`}><Clock size={10}/></span>}
+                              </span>
                             : <span className="find-score none">—</span>}
                       </td>
                       <td>
