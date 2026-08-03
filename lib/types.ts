@@ -13,6 +13,8 @@ export type WebsiteAnalysis = {
   hasCTA: boolean;
   hasOutdatedHTML: boolean;
   httpStatus: number | null;
+  // true when Cloudflare or similar blocked the request — content checks are unreliable
+  blocked: boolean;
   error: string | null;
 };
 
@@ -51,6 +53,17 @@ export const issueLabels: Record<keyof Lead["issues"], string> = { mobile:"Poor 
 export function scoreLead(lead: Lead) { const weights: Record<keyof Lead["issues"],number>={mobile:22,slow:14,dated:18,noCta:20,noBooking:16,noSsl:10}; return (Object.keys(weights) as (keyof Lead["issues"])[]).reduce((n,k)=>n+(lead.issues[k]?weights[k]:0),0); }
 export function issuesFromAnalysis(a: WebsiteAnalysis, noWebsite = false): Lead["issues"] {
   if (noWebsite) return { mobile:true,slow:true,dated:true,noCta:true,noBooking:true,noSsl:true };
+  // When blocked by Cloudflare etc., only flag what we can actually verify
+  if (a.blocked) {
+    return {
+      mobile: false,
+      slow: a.responseTimeMs !== null && a.responseTimeMs > 3000,
+      dated: false,
+      noCta: false,
+      noBooking: false,
+      noSsl: !a.hasHttps,
+    };
+  }
   return {
     mobile: !a.hasMobileViewport,
     slow: a.responseTimeMs !== null && a.responseTimeMs > 3000,

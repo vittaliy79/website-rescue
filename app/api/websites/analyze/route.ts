@@ -2,46 +2,37 @@ import { NextRequest, NextResponse } from "next/server";
 import { lookup } from "node:dns/promises";
 import type { WebsiteAnalysis } from "@/lib/types";
 
-const TIMEOUT_MS = 8_000;
-const MAX_BODY_BYTES = 512 * 1024; // 512 KB
+const TIMEOUT_MS = 12_000;
+const MAX_BODY_BYTES = 512 * 1024;
 const MAX_REDIRECTS = 5;
 
-function isPrivateIP(ip: string): boolean {
-  // IPv6 loopback / link-local / ULA
-  if (ip === "::1" || /^::ffff:/i.test(ip)) {
-    const v4 = ip.replace(/^::ffff:/i, "");
-    return isPrivateIP(v4);
-  }
-  if (/^fe80:/i.test(ip)) return true;
-  if (/^f[cd][0-9a-f]{2}:/i.test(ip)) return true;
-  if (ip.includes(":")) return false; // other IPv6 — allow
+const BROWSER_HEADERS: Record<string, string> = {
+  "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+  "Accept-Language": "en-US,en;q=0.9",
+  "Cache-Control": "no-cache",
+  "Upgrade-Insecure-Requests": "1",
+};
 
-  const parts = ip.split(".").map(Number);
-  if (parts.length !== 4 || parts.some((p) => isNaN(p) || p < 0 || p > 255)) return true;
-  const [a, b] = parts;
-  if (a === 0) return true;           // 0.0.0.0/8
-  if (a === 10) return true;          // 10.0.0.0/8
-  if (a === 127) return true;         // 127.0.0.0/8 loopback
-  if (a === 169 && b === 254) return true; // 169.254.0.0/16 link-local
-  if (a === 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12
-  if (a === 192 && b === 168) return true; // 192.168.0.0/16
-  if (a === 100 && b >= 64 && b <= 127) return true; // 100.64.0.0/10 shared
-  if (a === 198 && (b === 18 || b === 19)) return true; // 198.18.0.0/15 benchmark
-  if (a === 255) return true;         // broadcast
-  return false;
+function isPrivateIP(ip: string): boolean {
+  if (ip === "::1" || /^::ffff:/i.test(ip)) return isPrivateIP(ip.replace(/^::ffff:/i, ""));
+  if (/^fe80:/i.test(ip) || /^f[cd][0-9a-f]{2}:/i.test(ip)) return true;
+  if (ip.includes(":")) return false;
+  const p = ip.split(".").map(Number);
+  if (p.length !== 4 || p.some((n) => isNaN(n) || n < 0 || n > 255)) return true;
+  const [a, b] = p;
+  return a === 0 || a === 10 || a === 127 || a === 255 ||
+    (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) ||
+    (a === 198 && (b === 18 || b === 19));
 }
 
 async function validateUrl(urlStr: string): Promise<URL> {
   let parsed: URL;
   try { parsed = new URL(urlStr); } catch { throw new Error("Invalid URL."); }
-  if (!["http:", "https:"].includes(parsed.protocol)) {
-    throw new Error("Only http and https URLs are allowed.");
-  }
+  if (!["http:", "https:"].includes(parsed.protocol)) throw new Error("Only http and https URLs are allowed.");
   const hostname = parsed.hostname.toLowerCase();
-  if (hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1") {
-    throw new Error("Access to localhost is not allowed.");
-  }
-  // Resolve hostname and reject private IPs
+  if (hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1") throw new Error("Access to localhost is not allowed.");
   let addresses: { address: string }[];
   try { addresses = await lookup(hostname, { all: true }); } catch { throw new Error(`Cannot resolve host: ${hostname}`); }
   for (const { address } of addresses) {
@@ -54,34 +45,18 @@ async function safeFetch(startUrl: string): Promise<{ html: string; finalUrl: st
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   const start = Date.now();
-
   try {
     let currentUrl = startUrl;
     let hops = 0;
-
     while (hops <= MAX_REDIRECTS) {
       await validateUrl(currentUrl);
-
-      const res = await fetch(currentUrl, {
-        method: "GET",
-        headers: {
-          "User-Agent": "Mozilla/5.0 (compatible; SiteAuditBot/1.0)",
-          Accept: "text/html,application/xhtml+xml",
-          "Accept-Language": "en-US,en;q=0.9",
-        },
-        redirect: "manual",
-        signal: controller.signal,
-      });
-
+      const res = await fetch(currentUrl, { method: "GET", headers: BROWSER_HEADERS, redirect: "manual", signal: controller.signal });
       if (res.status >= 300 && res.status < 400) {
         const loc = res.headers.get("location");
         if (!loc) { clearTimeout(timer); return { html: "", finalUrl: currentUrl, responseTimeMs: Date.now() - start, httpStatus: res.status }; }
         try { currentUrl = new URL(loc, currentUrl).href; } catch { break; }
-        hops++;
-        continue;
+        hops++; continue;
       }
-
-      // Read up to MAX_BODY_BYTES
       const reader = res.body?.getReader();
       let html = "";
       if (reader) {
@@ -95,7 +70,6 @@ async function safeFetch(startUrl: string): Promise<{ html: string; finalUrl: st
           if (received >= MAX_BODY_BYTES) { reader.cancel(); break; }
         }
       }
-
       clearTimeout(timer);
       return { html, finalUrl: currentUrl, responseTimeMs: Date.now() - start, httpStatus: res.status };
     }
@@ -107,29 +81,74 @@ async function safeFetch(startUrl: string): Promise<{ html: string; finalUrl: st
   }
 }
 
+function detectBotBlock(html: string, status: number): boolean {
+  if (html.length < 200) return status === 403 || status === 429;
+  const h = html.slice(0, 4000);
+  return (
+    h.includes("challenges.cloudflare.com") ||
+    h.includes("Just a moment...") ||
+    h.includes("Enable JavaScript and cookies to continue") ||
+    h.includes("cf-browser-verification") ||
+    h.includes("_cf_chl_opt") ||
+    h.includes("Pardon Our Interruption") ||
+    h.includes("datadome") ||
+    h.includes("px-captcha") ||
+    h.includes("Verifying you are human") ||
+    h.includes("bot protection") ||
+    h.includes("ddos protection by cloudflare")
+  );
+}
+
 function analyzeHtml(html: string, finalUrl: string, responseTimeMs: number, httpStatus: number): WebsiteAnalysis {
+  const blocked = detectBotBlock(html, httpStatus);
+  const isReachable = httpStatus > 0 && httpStatus < 500;
+
+  if (blocked) {
+    return {
+      isReachable,
+      responseTimeMs,
+      hasHttps: finalUrl.startsWith("https://"),
+      hasMobileViewport: false,
+      hasTitle: false,
+      hasMetaDescription: false,
+      hasPhone: false,
+      hasContactForm: false,
+      hasBooking: false,
+      hasCTA: false,
+      hasOutdatedHTML: false,
+      httpStatus,
+      blocked: true,
+      error: "Site uses bot protection — content analysis unavailable",
+    };
+  }
+
   const h = html.toLowerCase();
+
+  const hasCTA = /\b(call\s*(now|us|today)|contact\s*us|get\s*(a\s*)?(free\s*)?(quote|estimate|consultation|proposal|inspection)|free\s*(estimate|quote|consultation|inspection|trial)|request\s*(an?\s*)?(quote|estimate|appointment|service|callback|call|demo)|get\s+started|book\s*(now|online|today|an?\s+appointment|a\s+(visit|call))?|schedule\s*(now|today|free|a?\s*(appointment|consultation|visit|call|estimate|cleaning|exam))?|make\s+an?\s+appointment|sign\s+up|apply\s+now|order\s+now|buy\s+now|shop\s+now|try\s+(it\s+)?(free|now)|start\s+(free|your)|claim\s+(your|free))\b/i.test(h);
+
+  const hasBooking = /\b(book\s*(now|online|today|an?\s+appointment|a\s*(visit|service|call))?|appointment(s)?\b|schedul(e|ing|er)\b|reserv(e|ation|ing)\b|availabilit|pick\s+a\s+(time|date|slot)|online\s+(booking|scheduling)|new\s+patient|returning\s+patient|patient\s+portal|request\s+an?\s+appointment|same[- ]day)\b|calendly\.|acuityscheduling\.|mindbodyonline\.|zocdoc\.|patientpop\.|solutionreach\.|healthgrades\.|nexhealth\.|opencare\.|fresha\.|vagaro\.|booksy\./i.test(h);
+
+  const hasPhone = /href=["']tel:/i.test(html) || /(?:\+?1[\s.\-()]?)?\(?\d{3}\)?[\s.\-]?\d{3}[\s.\-]?\d{4}/.test(html);
+
+  const hasContactForm =
+    (/<form[^>]*>/i.test(html) && (/<input[^>]+type=["']?(email|tel)/i.test(html) || /<textarea/i.test(html))) ||
+    /<input[^>]+placeholder=["'][^"']*(?:email|phone|message|name)/i.test(html);
+
   return {
-    isReachable: httpStatus >= 200 && httpStatus < 400,
+    isReachable,
     responseTimeMs,
     hasHttps: finalUrl.startsWith("https://"),
-    hasMobileViewport: /<meta[^>]+name=["']?viewport/i.test(html),
+    hasMobileViewport: /<meta[^>]+name=["']?viewport[^>]*>/i.test(html),
     hasTitle: /<title[^>]*>[^<]{2,}<\/title>/i.test(html),
     hasMetaDescription: /<meta[^>]+name=["']?description/i.test(html),
-    hasPhone:
-      /href=["']tel:/i.test(html) ||
-      /(?:\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/.test(html),
-    hasContactForm:
-      /<form[^>]*>/i.test(html) &&
-      (/<input[^>]+type=["']?(email|tel)/i.test(html) || /<textarea/i.test(html)),
-    hasBooking:
-      /\b(book\s*(now|online|appointment|a\s+time)|schedul|appointment|reserv|availability|pick\s+a\s+time|online\s+booking|calendar)\b/.test(h),
-    hasCTA:
-      /\b(call\s+now|call\s+us|contact\s+us|get\s+a\s+quote|free\s+(estimate|quote|consultation)|request\s+a|get\s+started|schedule\s+(now|today)|book\s+now|sign\s+up)\b/.test(h),
-    hasOutdatedHTML:
-      /<marquee[\s>]|<blink[\s>]|<font\s[^>]*(color|face|size)|<center[\s>]|<applet[\s>]|application\/x-shockwave-flash/i.test(html),
+    hasPhone,
+    hasContactForm,
+    hasBooking,
+    hasCTA,
+    hasOutdatedHTML: /<marquee[\s>]|<blink[\s>]|<font\s[^>]*(color|face|size)|<applet[\s>]|application\/x-shockwave-flash/i.test(html),
     httpStatus,
-    error: null,
+    blocked: false,
+    error: isReachable ? null : `HTTP ${httpStatus}`,
   };
 }
 
@@ -139,23 +158,19 @@ export async function POST(req: NextRequest) {
 
   const { url } = body as Record<string, unknown>;
 
-  // No website — valid case, return high-opportunity result
   if (!url || (typeof url === "string" && url.trim() === "")) {
     const analysis: WebsiteAnalysis = {
       isReachable: false, responseTimeMs: null, hasHttps: false,
       hasMobileViewport: false, hasTitle: false, hasMetaDescription: false,
       hasPhone: false, hasContactForm: false, hasBooking: false,
-      hasCTA: false, hasOutdatedHTML: false, httpStatus: null, error: "No website",
+      hasCTA: false, hasOutdatedHTML: false, httpStatus: null, blocked: false, error: "No website",
     };
     return NextResponse.json({ analysis, noWebsite: true });
   }
 
-  if (typeof url !== "string") {
-    return NextResponse.json({ error: "url must be a string." }, { status: 400 });
-  }
+  if (typeof url !== "string") return NextResponse.json({ error: "url must be a string." }, { status: 400 });
 
   const rawUrl = url.trim();
-  // Ensure the URL has a scheme so URL() can parse it
   const fullUrl = /^https?:\/\//i.test(rawUrl) ? rawUrl : `https://${rawUrl}`;
 
   try {
@@ -164,11 +179,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ analysis, noWebsite: false });
   } catch (err) {
     const msg = (err as Error).message ?? "Analysis failed.";
-    // Don't leak internal details — log server-side, return safe message
-    if (
-      msg.includes("private") || msg.includes("localhost") || msg.includes("internal") ||
-      msg.includes("resolve") || msg.includes("Protocol")
-    ) {
+    if (msg.includes("private") || msg.includes("localhost") || msg.includes("internal") || msg.includes("resolve") || msg.includes("Protocol")) {
       return NextResponse.json({ error: "This URL cannot be analyzed." }, { status: 422 });
     }
     if ((err as Error).name === "AbortError") {
@@ -176,16 +187,15 @@ export async function POST(req: NextRequest) {
         isReachable: false, responseTimeMs: TIMEOUT_MS, hasHttps: fullUrl.startsWith("https://"),
         hasMobileViewport: false, hasTitle: false, hasMetaDescription: false,
         hasPhone: false, hasContactForm: false, hasBooking: false,
-        hasCTA: false, hasOutdatedHTML: false, httpStatus: null, error: "Request timed out",
+        hasCTA: false, hasOutdatedHTML: false, httpStatus: null, blocked: false, error: "Request timed out",
       };
       return NextResponse.json({ analysis, noWebsite: false });
     }
-    // Unreachable
     const analysis: WebsiteAnalysis = {
       isReachable: false, responseTimeMs: null, hasHttps: fullUrl.startsWith("https://"),
       hasMobileViewport: false, hasTitle: false, hasMetaDescription: false,
       hasPhone: false, hasContactForm: false, hasBooking: false,
-      hasCTA: false, hasOutdatedHTML: false, httpStatus: null, error: msg.slice(0, 120),
+      hasCTA: false, hasOutdatedHTML: false, httpStatus: null, blocked: false, error: msg.slice(0, 120),
     };
     return NextResponse.json({ analysis, noWebsite: false });
   }

@@ -53,14 +53,22 @@ function calcScore(a: WebsiteAnalysis, noWebsite: boolean): number {
 }
 
 function AnalysisBadges({ a }: { a: WebsiteAnalysis }) {
+  // When blocked by Cloudflare etc., don't show false issue tags — we simply couldn't read the page
+  if (a.blocked) {
+    return (
+      <span className="find-blocked-tag" title="Cloudflare or similar bot-protection prevented content analysis. HTTPS and response time are still verified.">
+        🛡 Bot protection
+      </span>
+    );
+  }
   const issues: string[] = [];
+  if (!a.isReachable) issues.push("Unreachable");
   if (!a.hasHttps) issues.push("No HTTPS");
   if (!a.hasMobileViewport) issues.push("No mobile");
   if (!a.hasCTA) issues.push("No CTA");
   if (!a.hasBooking) issues.push("No booking");
   if (a.responseTimeMs && a.responseTimeMs > 3000) issues.push(`Slow (${(a.responseTimeMs / 1000).toFixed(1)}s)`);
   if (a.hasOutdatedHTML) issues.push("Outdated HTML");
-  if (!a.isReachable) issues.push("Unreachable");
   if (!issues.length) return <span className="find-ok">&#10003; No major issues</span>;
   return <>{issues.map(i => <span key={i} className="find-issue-tag">{i}</span>)}</>;
 }
